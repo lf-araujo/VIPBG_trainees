@@ -1,1 +1,0 @@
-# VIPBG_trainees

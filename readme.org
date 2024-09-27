@@ -1,0 +1,1347 @@
+#+title: Collection of useful scripts in use by VIPBG trainees
+
+
+
+
+* TOC :toc:
+- [[#openmx-facilities][OpenMx facilities]]
+  - [[#quick-way-to-optimize-ordinal-variables-levels-by-coalescing-adjacent-levels-instead-of-lumping-them-into-the-last-level-as-is-done-in-dplyr][Quick way to optimize ordinal variables levels by coalescing adjacent levels instead of lumping them into the last level as is done in dplyr]]
+  - [[#confint-will-not-print-ses-if-there-are-nas-in-the-parameter-list-vector-here-is-a-version-that-returns-the-cis-even-in-the-presence-of-nas-in-the-vector][Confint will not print SEs if there are NAs in the parameter list vector, here is a version that returns the CIs even in the presence of NAs in the vector]]
+  - [[#umx_scale-version-with-support-for-any-number-of-groups-mz-dz-non-twin-sibs][umx_scale version with support for any number of groups (MZ, DZ, non-twin sibs)]]
+- [[#tutorials][Tutorials]]
+  - [[#mendelian-randomization-and-simulations-with-twin-data][Mendelian randomization and simulations with twin data]]
+  - [[#recap-mendelian-randomization-assumptions][Recap, Mendelian randomization assumptions]]
+  - [[#causal-inference-using-twin-design][Causal inference using twin-design]]
+  - [[#practical][Practical]]
+
+* OpenMx facilities
+
+** Quick way to optimize ordinal variables levels by coalescing adjacent levels instead of lumping them into the last level as is done in dplyr 
+
+#+begin_src R :session R-doc :results output none
+relevel_factors <- function(df, cols, prop = .1, min = 8) {
+
+      if (length(unique(sapply(df[cols], function(x) length(levels(x))))) > 1) {
+        stop("All columns must have the same number of levels")
+      }
+
+      # Get the levels of the first column
+      first_col_levels <- levels(df[[cols[1]]])
+
+      # Calculate the percentage of total observations for each level
+      lev_perc <- table(df[[cols[1]]]) / length(df[[cols[1]]])
+
+      # Get the levels in order
+      ordered_levels <- levels(df[[cols[1]]])
+
+      # Initialize a new vector to hold the collapsed levels
+      new_vector <- df[[cols[1]]]
+
+      # Loop over the levels
+      for (i in length(ordered_levels):2) {
+        lev <- ordered_levels[i]
+        # If the level makes up less than prop of the observations
+        if (lev_perc[lev] < prop) {
+          # Find the previous level
+          prev_lev <- ordered_levels[i - 1]
+
+          # Collapse the level into the previous level
+          new_vector[new_vector == lev] <- prev_lev
+        }
+
+                                            # Ensure there are at least 5 levels left
+        if (length(unique(new_vector)) <= min) break
+      }
+
+                                            # Relevel the factor with the original order
+      df[[cols[1]]] <- factor(new_vector, levels = ordered_levels)
+
+      # Remove empty levels
+      df[[cols[1]]] <- droplevels(df[[cols[1]]])
+
+      # Apply the same levels to the remaining columns
+      for (col in cols[-1]) {
+        if (is.factor(df[[col]])) {
+          df[[col]] <- factor(df[[col]], levels = levels(df[[cols[1]]]))
+        }
+      }
+
+      return(df)
+    }
+
+#+end_src
+
+
+** Confint will not print SEs if there are NAs in the parameter list vector, here is a version that returns the CIs even in the presence of NAs in the vector
+
+#+begin_src R :session R-doc :results output none
+safe_confint <- function(model, params) {
+  # Extract the parameters and their standard errors once
+  param_summary <- summary(model)$parameters
+  param_names <- param_summary$name
+  param_se <- param_summary$Std.Error
+  
+  # Initialize a data frame to store confidence intervals
+  ci_df <- data.frame(param = character(), lbound = numeric(), ubound = numeric(), stringsAsFactors = FALSE)
+  
+  # Loop through each parameter
+  for (param in params) {
+    # Find the index of the parameter
+    param_index <- which(param_names == param)
+    se <- param_se[param_index]
+    
+    if (is.na(se) || is.nan(se)) {
+      # If standard error is NA or NaN, store NA in the data frame
+      ci_df <- rbind(ci_df, data.frame(param = param, lbound = NA, ubound = NA))
+    } else {
+      # Try to get the confidence interval
+      tryCatch({
+        ci <- confint(model, param)
+        # Extract the lower and upper bounds
+        lbound <- ci[1, 1]
+        ubound <- ci[1, 2]
+        # Append to the data frame
+        ci_df <- rbind(ci_df, data.frame(param = param, lbound = lbound, ubound = ubound))
+      }, error = function(e) {
+        # If there's an error, store NA in the data frame
+        ci_df <- rbind(ci_df, data.frame(param = param, lbound = NA, ubound = NA))
+      })
+    }
+  }
+  
+  return(ci_df)
+}
+
+#+end_src
+
+
+
+** umx_scale version with support for any number of groups (MZ, DZ, non-twin sibs)
+
+#+begin_src R 
+umx_scale_wide_twin_sibs_data <- function(varsToScale, sep, data, twins = 1:2) {
+    if (length(sep) != 1) {
+        stop("I need one sep, you gave me ", length(sep), "\nYou might, for instance, need to change c('_T1', '_T2') to just '_T'")
+    }
+    
+    namesNeeded <- umx_paste_names(varsToScale, sep = sep, suffixes = twins)
+    umx_check_names(namesNeeded, data)
+    
+    for (i in 1:length(varsToScale)) {
+        combinedData <- NULL
+        for (twin in twins) {
+            trait <- paste0(varsToScale[i], sep, twin)
+            if (is.numeric(data[, trait])) {
+                combinedData <- c(combinedData, data[, trait])
+            }
+        }
+        
+        if (!is.null(combinedData)) {
+            totalMean <- mean(combinedData, na.rm = TRUE)
+            totalSD <- sd(combinedData, na.rm = TRUE)
+            
+            for (twin in twins) {
+                trait <- paste0(varsToScale[i], sep, twin)
+                if (is.numeric(data[, trait])) {
+                    data[, trait] <- (data[, trait] - totalMean) / totalSD
+                }
+            }
+        }
+    }
+    
+    return(data)
+}
+#+end_src
+
+
+* Tutorials
+
+** Mendelian randomization and simulations with twin data
+
+** Recap, Mendelian randomization assumptions
+
+*** Mendelian randomization
+
+- Uses genetic variants as instrumental variables [cite: @richmondMendelianRandomizationConcepts2022]
+- Helps understand causation, but has strong assumptions [cite: @sandersonMendelianRandomizationNature2022]
+  1. G (instrument) is robustly associated with X (“relevance”);
+  2. G does not share common causes (C) with Y (Outcome) (“independence” or “exchangeability”); and
+  3. G affects Y exclusively through its effect on X (“exclusion restriction”).
+
+
+#+ATTR_HTML: :height 150px
+[[/home/luis/Desktop/2024-Boulder/graphs/conditions.png]]
+
+** Causal inference using twin-design
+
+**** Pleiotropy is pervasive
+
+**** Evidence from literature
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+- Genetic variant influences more than one trait
+- Horizontal vs Vertical pleiotropy
+  - It has a central role in the genetic architecture [cite: @jordanHOPSQuantitativeScore2019]
+  - Pleiotropy in over 48% of significant MR [cite: @verbanckDetectionWidespreadHorizontal2018], with large distortions on MR estimates.
+
+
+**** Diagrams
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+[[/home/luis/Desktop/2024-Boulder/graphs/pleiotropy.png]]
+
+#+CAPTION:(LD) and polygenicity are expected to contribute to horizontal pleiotropy
+[[/home/luis/Desktop/2024-Boulder/graphs/pleiotropy2.png]]
+
+
+*** Why twins?
+
+- Access to twin data
+- Triangulation of findings, confirmation of a causal relationship
+- Interest in the variance components or in the background confounding elements
+
+
+*** Structural equation modeling - equivalence to 2SLS
+
+**** Spec in SEM
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+- SEM solutions have recovered exact estimates as 2-stage least squares, with caveats [cite: @maydeu-olivaresInstrumentalVariablesTwoStage2019]
+  - less convergence in weak instruments
+  - slightly worse performance in ML-SEM
+
+**** Diagram
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+#+CAPTION: Instrumental Variables Regression (IVR) model that enables drawing causal inferences on the target regression mode
+[[/home/luis/Desktop/2024-Boulder/graphs/maydeu.png]]
+
+*** Model
+
+[[/home/luis/Desktop/2024-Boulder/graphs/doc.png]]
+
+
+*** Direction of Causation model   [cite: @nealeMethodologyGeneticStudies1992]
+
+**** Model specification                                         :B_block:
+:PROPERTIES:
+:BEAMER_col: 0.5
+:BEAMER_env: block
+:END:
+
+#+CAPTION:Path diagram representing a Bidirectional DoC for one twin. =cov(A1,A2) = ra * sqrt(ax2 * ay2); cov(C1,C2) = rc * sqrt(cx2 * cy2); cov(E1,E2) = re * sqrt(ex2 * ey2)=
+[[/home/luis/Desktop/2024-Boulder/graphs/doc.png]]
+
+
+**** Path diagram representing a Bidirectional DoC for one twin
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+- Causal paths are estimated including information from the cross-twin cross-trait correlations.
+- Cross-twin covariance between additive genetic effects is 0.5 (not shown) for DZ twins, as DZs are expected to share 50% of the genetic effects.
+- Standard SEM symbology is used.
+
+
+*** Direction of Causation
+
+**** Model specification
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+
+#+CAPTION:Path diagram representing a Bidirectional DoC for one twin. =cov(A1,A2) = ra * sqrt(ax2 * ay2); cov(C1,C2) = rc * sqrt(cx2 * cy2); cov(E1,E2) = re * sqrt(ex2 * ey2)=
+[[/home/luis/Desktop/2024-Boulder/graphs/doc.png]]
+
+
+**** Problems
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+#+BEAMER: \small
+
+- Bias at the phenotypic level [cite: @gillespieDirectionCausationModeling2003]
+- Bias due to lack of unmodelled E confounding [cite: @rasmussenMajorLimitationDirection2019]
+- Better detection of causal paths with different variance component proportions for each phenotype [cite: @maesUsingMultimodelInference2021]
+
+
+*** MR-DoC model [cite: @minicaExtendingCausalityTests2018]
+
+#+begin_latex
+\begin{center}
+#+end_latex
+
+
+#+CAPTION:Path diagram for one twin. =cov(A1,A2) = ra * sqrt(ax2 * ay2); cov(C1,C2) = rc * sqrt(cx2 * cy2); cov(E1,E2) = re * sqrt(ex2 * ey2)=
+#+ATTR_LATEX: :height 170px
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1.png]]
+
+#+begin_latex
+\end{center}
+#+end_latex
+
+
+
+*** MR-DoC - identified cases
+
+
+| x  | aX | cX | eX | aY | cY | eY | ra | rc | re | b1 | b2 | g1 | Id |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|-------------|
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | No         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0** | **fr** | **fr** | **fr** | **Yes**         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0** | **fr** | **Yes**         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0**  | **fr** | **fr**  | **fr** |  **fr** | **Yes**         |
+|   fr   |   fr   |   0   |   fr   |   fr   |   0   |    fr   |   fr     | 0     | fr | fr | fr  |   fr | No          |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **0** |  **fr** | **fr** | **0**  | **fr** | **fr**  | **fr** |  **fr** | **Yes**         |
+| fr | fr | 0  | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | No          |
+
+
+*** MR-DoC - identified cases
+#+BEAMER: \tiny
+
+
+| x  | aX | cX | eX | aY | cY | eY | ra | rc | re | b1 | b2 | g1 | Id |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|-------------|
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | No         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | Yes         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0** | **fr** | **Yes**         |
+| fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | No          |
+| fr | fr | fr | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | No          |
+
+
+#+ATTR_LATEX: :height 150px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1_b2.png]]
+
+
+*** MR-DoC - identified cases
+#+BEAMER: \tiny
+
+| x  | aX | cX | eX | aY | cY | eY | ra | rc | re | b1 | b2 | g1 | Id |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|-------------|
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | No         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | Yes         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | Yes         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0**  | **fr** | **fr**  | **fr** |  **fr** | **Yes**         |
+| fr | fr | 0  | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | No          |
+| fr | fr | fr | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | No          |
+
+
+#+ATTR_LATEX: :height 150px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1_rc.png]]
+
+
+
+*** MR-DoC - identified cases
+#+BEAMER: \tiny
+
+
+| x  | aX | cX | eX | aY | cY | eY | ra | rc | re | b1 | b2 | g1 | Id |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|-------------|
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | No         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | Yes         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | Yes         |
+| fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | No          |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **0** |  **fr** | **fr** | **0** | **fr** | **fr** | **fr** |  **fr** | **Yes**         |
+| fr | fr | 0  | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | No          |
+
+
+#+ATTR_LATEX: :height 150px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1_noC.png]]
+
+
+
+*** MR-DoC - identified cases
+
+#+BEAMER: \tiny
+
+| x  | aX | cX | eX | aY | cY | eY | ra | rc | re | b1 | b2 | g1 | Id |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|-------------|
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | No         |
+| **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **fr** | **0** | **fr** | **fr** | **fr** | **Yes**         |
+| fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | Yes         |
+| fr | fr | fr | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | No          |
+| fr | fr | fr | fr | fr | 0  | fr | fr | 0  | fr | fr | fr | fr | Yes         |
+| fr | fr | 0  | fr | fr | fr | fr | fr | 0  | fr | fr | fr | fr | No          |
+
+#+ATTR_LATEX: :height 150px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1_re.png]]
+
+
+*** MR-DoC2, adding bidirectional relationships
+
+**** Model specification                                         :B_block:
+:PROPERTIES:
+:BEAMER_col: 0.6
+:BEAMER_env: block
+:END:
+
+
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc2_b2_b4.png]]
+
+**** Modified MR-DOC
+:PROPERTIES:
+:BEAMER_col: 0.4
+:END:
+
+
+#+BEAMER: \small
+
+- Path diagram of the MR-DoC2 model for an individual. [cite: @castro-de-araujoMRDoC2BidirectionalCausal2023]
+- The model includes the effects of additive genetic (A), common environment (C) and unique environment (E) factors for both X and Y, and their effects may correlate.
+
+
+*** MR-DoC2 in more detail
+
+#+ATTR_LATEX: :height 210px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc2_forward.png]]
+
+*** MR-DoC2 in more detail
+
+#+ATTR_LATEX: :height 210px :align center
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc2_reverse.png]]
+
+*** Comments on limitations and strengths  [cite: @castro-de-araujoPowerMeasurementError2023]
+
+
+- MR-DoC g1 is biased if modeled re = 0  (or cov(E1, E2) = 0), when re is *not equal* 0 in the data.
+- MR-DoC2 requires very large sample sizes to detect g1, g2
+- MR-DoC2 g1, g2 unbiased in the presence of measurement error
+
+** Practical
+
+*** Copying files
+
+#+begin_src bash :eval no :exports both
+# Make sure you are in your home folder by typing:
+pwd
+
+# Create a directory to hold today’s work by typing:
+mkdir mrdoc
+
+# Change your directory to the new folder:
+cd mrdoc
+
+# Copy files, don't forget the dot at the end
+cp /faculty/luis/2024/mrdoc/* .
+
+#+end_src
+
+*** Practical - Implementation notes
+
+**** Beta matrix
+#+BEAMER: \small
+
+#+begin_src R :eval no :exports both
+ BE <- mxMatrix(name = "BE", type = "Full",nrow=3,  ncol = 3, byrow = TRUE,
+           labels = c(NA,   "g2", "b1",
+                      "g1", NA,   "b2",
+                      NA,   NA,   NA),
+           free = c(FALSE, FALSE, TRUE,
+                    TRUE,  FALSE, TRUE,
+                    FALSE, FALSE, FALSE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+#+end_src
+
+*** Practical - Implementation notes
+
+**** A, C, E variances
+#+BEAMER: \small
+
+
+#+begin_src R :eval no :exports both
+# ACE decomposition
+A <-  mxMatrix(name = 'A', type='Symm', nrow=3,ncol = 3,byrow = TRUE,
+           labels=c("ax2",  "covA", NA,
+                    "covA", "ay2",  NA,
+                    NA,     NA,     "sigma_x"),
+           free=c(TRUE, TRUE, FALSE,
+                  TRUE, TRUE, FALSE,
+                  FALSE,FALSE,TRUE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+#+end_src
+
+*** Practical - Implementation notes
+
+**** A filter matrix is required to trop PRSs from twin 2 in MZs
+
+#+BEAMER: \small
+
+#+begin_src R :eval no :exports both
+  # The filter matrix is used to remove the PRS from MZs,
+  # if we kept it the matrix would become redundant resulting
+  # in Hessian not positive
+  filter <- mxMatrix(name = 'filter', type='Full', nrow=5, ncol=6, free=FALSE,
+           byrow = TRUE,
+           values=c(1,0,0,0,0,0,
+                    0,1,0,0,0,0,
+                    0,0,1,0,0,0,
+                    0,0,0,1,0,0,
+                    0,0,0,0,1,0))
+#+end_src
+
+
+*** Practical - Implementation notes
+
+#+BEAMER: \small
+
+- In the script you will find the pipe operator from R base =|>=, this is done to achieve concise blocks of code while still being expressive.
+- The idea is that the resulting object from one instruction is passed on to the next instruction. Example:
+
+#+begin_src R :eval no :exports both
+unrel4 <- unrel3 |>
+  omxSetParameters(name = "no_causal",  label="g1", free = FALSE,
+                           values = 0) |>
+  mxRun()
+#+end_src
+
+- In the case above, =omxSetParameters()= returns a model with modified parameters and this model is then passed to =mxRun()=, which returns the same model after estimation to the object =unrel4= using the assignment operator =<-=.
+
+
+*** Copying files
+
+#+begin_src bash :eval no :exports both
+# Make sure you are in your home folder by typing:
+pwd
+
+# Create a directory to hold today’s work by typing:
+mkdir mrdoc
+
+# Change your directory to the TwinFacMod folder:
+cd mrdoc
+
+# Copy files, don't forget the dot at the end
+cp /faculty/luis/2024/mrdoc/* .
+
+#+end_src
+
+
+*** Practical sections
+
+Aims:
+
+  1. How to setup a simulation in OpenMx using mxGenerateData
+  2. How to specify a two-stage least squares test in OpenMx
+  3. Check that MR-DoC recovers the same estimates from 2sls test
+  4. Check that in the presence of horizontal pleiotropy estimates are biased  in the 2sls test
+
+The script will exemplify four scenarios:
+
+  - no pleiotropy between the instrument and the outcome (Scenario 1),
+  - where there is pleiotropy (Scenario 2),
+  - presence of a bidirectional causal effect (Scenario 3),
+  - absence of a  causal effect (Scenario 4)
+
+*** Copying files
+
+#+begin_src bash :eval no :exports both
+# Make sure you are in your home folder by typing:
+pwd
+
+# Create a directory to hold today’s work by typing:
+mkdir mrdoc
+
+# Change your directory to the TwinFacMod folder:
+cd mrdoc
+
+# Copy files, don't forget the dot at the end
+cp /faculty/luis/2024/mrdoc/* .
+
+#+end_src
+
+
+
+*** Practical
+
+**** MR-DoC1 spec
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+[[/home/luis/Desktop/2024-Boulder/graphs/mrdoc1.png]]
+
+**** IV regression SEM spec
+:PROPERTIES:
+:BEAMER_col: 0.5
+:END:
+
+[[file:/home/luis/Desktop/2024-Boulder/graphs/maydeu-onyx.png]]
+
+
+*** Summary and take-home message
+**** Conclusions
+
+- 2sls and IV-SEM does not recover the true values set at the simulation in the presence of horizontal pleiotropy (simulation with b2).
+
+- 2sls and IV-SEM does not recover the true values set at the simulation in the presence of indirect pleiotropy (from PS1 to trait 2 via rf * b3, or from PS2 to trait 1 via rf * b1).
+
+
+
+#+begin_src R  :session pres :tangle 2024-mrdoc-boulder-ANSWERS.R :exports none :eval no
+# Mendelian randomization using the twin design
+# Boulder Workshop 2024
+# Luis Araujo
+# This script is a modified version of Minica & Neale 2018 AGES workshop
+
+# In this script we will test the (bidirectional) causal effect between two
+# phenotypes, think of BMI on SBP (systolic blood pressure) and vice-versa,
+# and polygenic scores for each.
+# In the interest of brevity we will always refer to BMI as variable X, and SBP
+# as variable Y, with the respective instruments iX and iY.
+#
+# There are four main take away messages that you should focus:
+#   1. How to setup a simulation in OpenMX using mxGenerateData
+#   2. That a two-stages least squares test can be specified in SEM in OpenMX
+#   3. That MR-DoC recovers the same estimates from 2sls test
+#   4. That in the presence of horizontal pleiotropy estimates are biased
+#         in the 2sls test and unbiased in MR-DoC
+#
+# The script contains four scenarios,
+#   - no pleiotropy between the instrument and the outcome (Scenario 1),
+#   - where there is pleiotropy (Scenario 2),
+#   - presence of a bidirectional causal effect (Scenario 3)
+#   - absence of a  causal effect (Scenario 4)
+# See presentation slides for path diagrams.
+# If you are using RStudio you can navigate using the outline dropdown menu
+
+
+# Setting the stage ------------------------------------------------------------
+
+rm(list=ls())  # Emptying the R environment, not recommended usually but useful
+               # for this workshop
+
+
+# loading required packages
+library(OpenMx)
+library(MASS)
+library(dplyr)
+
+options(digits = 2, scipen = 999)  # we dont want scientific notation
+mxOption(NULL, "Default optimizer", "SLSQP")
+
+# The models are specified in three objects, top (for common parts), MZ and DZ
+# spend some time recognizing the elements in the model, by now you should
+# have seen similar code. Notice two minor style changes, I am naming
+# the objects at the beginning and the matrices labels spelled out in the
+# positions they will end up in the matrix.
+# The final objects (mrdoc1, mrdoc2) will be reused throughout the script.
+# The matrix containing regressions for causal paths and instruments
+BE <- mxMatrix(name = "BE", type = "Full",nrow=3,  ncol = 3, byrow = TRUE,
+           labels = c(NA,   "g2", "b1",
+                      "g1", NA,   "b2",
+                      NA,   NA,   NA),
+           free = c(FALSE, FALSE, TRUE,
+                    TRUE,  FALSE, TRUE,
+                    FALSE, FALSE, FALSE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+# ACE decomposition
+A <-  mxMatrix(name = 'A', type='Symm', nrow=3,ncol = 3,byrow = TRUE,
+           labels=c("ax2", "covA", NA,
+                    "covA","ay2",  NA,
+                    NA,    NA,     "sigma_x"),
+           free=c(TRUE, TRUE, FALSE,
+                  TRUE, TRUE, FALSE,
+                  FALSE,FALSE,TRUE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+C <-  mxMatrix(name = 'C', type='Symm',nrow=3, ncol = 3,byrow = TRUE,
+           labels =c("cx2", "covC", NA,
+                     "covC","cy2",  NA,
+                     NA,    NA,     NA),
+           free=c(TRUE, TRUE, FALSE,
+                  TRUE, TRUE, FALSE,
+                  FALSE,FALSE,FALSE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+E <-  mxMatrix(name = 'E', type='Symm', nrow=3, ncol = 3,byrow = TRUE,
+           labels =c("ex2", "covE",NA,
+                     "covE","ey2", NA,
+                     NA,     NA,   NA),
+           free= c(TRUE, FALSE,FALSE,
+                   FALSE,TRUE, FALSE,
+                   FALSE,FALSE,FALSE),
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+# The filter matrix is used to remove the PRS from _T2 in MZs,
+# if we kept it the matrix would become redundant resulting
+# in the Hessian not positive
+filter <-  mxMatrix(name = 'filter', type='Full', nrow=5, ncol=6, free=FALSE,
+           byrow = TRUE,
+           values=c(1,0,0,0,0,0,
+                    0,1,0,0,0,0,
+                    0,0,1,0,0,0,
+                    0,0,0,1,0,0,
+                    0,0,0,0,1,0),
+           dimnames = list(c("X_T1", "Y_T1", "iX_T1","X_T2", "Y_T2"),
+                           c("X_T1", "Y_T1", "iX_T1","X_T2", "Y_T2", "iX_T2")))
+
+# This lambda (LY) matrix is fixing total variances to 1 for PRSs and
+# phenotypes
+LY <-  mxMatrix(name = 'LY', type='Full',nrow=3, ncol = 3, free = FALSE,
+           values = diag(3), labels = NA,
+           dimnames = list(c("X", "Y", "iX"),
+                           c("X", "Y", "iX")))
+
+# Means objects
+mean_dz <-  mxMatrix(name = 'mean_dz', type='Full', nrow=1, ncol=6,
+           free=TRUE, values= 0, byrow = TRUE,
+           labels=c('mX1','mY2','miX1','mX1','mY2','miX1'))
+
+mean_mz <-  mxAlgebra('mean_mz', expression = mean_dz%*%t(filter))
+
+# Identity matrix for the algebras
+I <-  mxMatrix(name = 'I', type='Iden', nrow= 3,ncol= 3)
+
+algebras <- list(
+  mxAlgebra('A_'  , expression = LY %&% solve(I - BE)%&%A),
+  mxAlgebra('C_'  , expression = LY %&% solve(I - BE)%&%C),
+  mxAlgebra('E_'  , expression = LY %&% solve(I - BE)%&%E),
+  mxAlgebra('SPh' , expression = A_ + C_ + E_),
+  mxAlgebra('variance_mz_', expression = rbind(
+    cbind(SPh, A_+C_),
+    cbind(A_+C_, SPh))),
+  mxAlgebra('variance_dz', expression= rbind(
+    cbind(SPh, .5%x%A_+C_),
+    cbind(.5%x%A_+C_, SPh))),
+  mxAlgebra('variance_mz', expression= filter%&%variance_mz_))
+
+top_mr1 <- mxModel("top", BE, A, C, E, filter, LY,  mean_dz, mean_mz, I, algebras)
+
+# Preparing the objects for the multiple groups (MZ, DZ) analysis
+MZ_mr1 = mxModel("MZ",mxFitFunctionML(),
+  mxExpectationNormal(covariance = "top.variance_mz", means = "top.mean_mz",
+                      dimnames =  c("X_T1", "Y_T1", "iX_T1",
+                                    "X_T2", "Y_T2")))
+
+DZ_mr1 = mxModel("DZ", mxFitFunctionML(),
+  mxExpectationNormal(covariance = "top.variance_dz", means = "top.mean_dz",
+                      dimnames =  c("X_T1", "Y_T1", "iX_T1",
+                                    "X_T2", "Y_T2", "iX_T2")))
+
+# Combining objects to generate the final model
+mrdoc1 = mxModel("mrdoc1", top_mr1, MZ_mr1, DZ_mr1,
+                 mxFitFunctionMultigroup(c("MZ","DZ") ) )
+
+
+# Scenario 1: no pleiotropy  ---------------------------------------------------
+
+# Generate simulated data for mrdoc1
+# Fit the model in unrelateds using a structural equation model
+# Fit the model in twins - using the MR-doc
+# Compare the NCPs of the models in unrelateds and twins
+# Look at the 2 stage least squares results
+
+
+# Let's generate  simulated data where b2 (the pleiotropic path) is zero,
+# in other words, no pleiotropy present in the data.
+# As such we need to set the true values, this is a way of doing this:
+true_model <-  mrdoc1 |>
+  omxSetParameters(labels =  c("g1","b1", "b2",
+                               "ax2", "ay2", "cx2", "cy2", "ex2", "ey2",
+                               "covA", "covC", "covE","sigma_x"),
+                   values = c(0.316, 0.316, 0,
+                              0.424, 0.671, 0.671, 0.424, 0.519, 0.519,
+                              0.411,0.221,0, 1)) |>
+  omxSetParameters(labels = c("b2"), free = FALSE) # remember, no pleiotropy
+
+# Simulating data according to the exact covariance matrix from mrdoc1 (above),
+# this is done using the switch empirical = T, this should be quick
+sim_data <- mxGenerateData(true_model, nrows = 1000, empirical = TRUE)
+
+# The data does not comes with the instrument column for the second twin,
+# we have to duplicate the column. In your analysis, this step will not happen,
+# we are doing this because of how I coded the simulation for this workshop.
+sim_data$MZ <- mutate(sim_data$MZ, iX_T2 = iX_T1)
+
+dnpmz <- sim_data$MZ
+dnpdz <- sim_data$DZ
+
+dim(dnpdz) #
+head(dnpdz)
+summary(dnpdz)
+
+dim(dnpmz) #
+head(dnpmz)
+summary(dnpmz)
+
+# We now add the data to the model object created before.
+# Notice that the plus sign is overloaded in OpenMx as it is, for example,
+# in ggplot2. So you can combine objects with the
+# syntax below instead of `model = mxModel(model, mxData(data, type = "raw"))`
+# This syntax is optional, but helps reducing the lenght of the script
+mrdoc1$MZ <- mrdoc1$MZ +  mxData(dnpmz, type = "raw")
+mrdoc1$DZ <- mrdoc1$DZ +  mxData(dnpdz, type = "raw")
+
+m1 <- mrdoc1 |>
+  # Remember, no b2 in data, no b2 in the model
+  omxSetParameters(labels = "b2", free = FALSE) |>
+  # The poing of examining the data a few lines above is to set sensible
+  # starting values for the model. Here, in the interest of brevity, we ask
+  # OpenMx to pick starting values for us.
+  mxAutoStart()
+
+m1 <- mxRun(m1)
+
+# In your analyses, make sure to test for local identification frequently:
+# mxCheckIdentification(m1)$status
+# Model is locally identified
+# [1] TRUE
+
+summary(m1)
+
+# One way of assessing whether the causal path is significant is by dropping it
+m2 <- omxSetParameters(m1, name = "nog1", labels="g1", free = FALSE,
+                       values = 0)
+m2 <- mxRun(m2)
+
+# Comparing the two models
+mxCompare(m1, m2)
+
+# Q1: We dropped the causal path, what is the interpretation for the above
+# result?
+# ANSWER: The causal path is significant, model m2 was worse.
+
+# Can we specify a model for a 2-stage least squares test using SEM and OpenMX?
+IVModel = mxModel("MR", type = "RAM", manifestVars = c("X", "Y", "I"),
+                    latentVars = c("eX", "eY"),
+   # Path from instrument to exposure
+   mxPath(from = "I" , to = "X", arrows = 1, label = "b1"),
+   # Path from exposure to outcome, g1
+   mxPath(from = "X", to = "Y", label = "g1"),
+   # Latent error+ setting up variance and means for variables
+   mxPath(from = c("I"), arrows = 2, label = "vI"),
+   mxPath(from = c("eX", "eY"), to = c("X","Y"), value = 1, free = FALSE),
+   # Variance of residual errors
+   mxPath(from = c("eX", "eY"), arrows =  2, free = TRUE,
+          labels = c("vX", "vY")),
+   mxPath(connect = "unique.bivariate", from =  c("eX", "eY"),   arrows = 2,
+          values = 0.2, labels = "re"), # Correlation among residuals
+   mxPath("one", to = c("X","Y", "I"), labels = c("mX", "mY", "mI")))
+
+# The above specification closely follows the slides in the presentation
+# If you have umx installed you can look at it:
+# library(umx)
+# plot(IVModel)
+
+# Let's generate a new data set by taking only twin 1 from mzs and dzs
+dat1 <- rbind(dnpmz[,1:3],dnpdz[,1:3]) |>
+  # we need to rename the variables to match the dimension names set in the
+  # IVmodel above
+  rename(X = X_T1,
+         Y = Y_T1,
+         I = iX_T1)
+
+# Adding the data to the model
+unrel <- IVModel + mxData(dat1, type = "raw")
+
+# Know your data, check variable skewness, kurtosis and means, but
+# in the interest of brevity, let's autostart
+unrel <- mxAutoStart(unrel)
+unrel <- mxRun(unrel)
+summary(unrel)
+
+unrel2 <- omxSetParameters(name = "no_causal", unrel, label="g1", free = FALSE,
+                           values = 0)
+unrel2 <- mxRun(unrel2)
+
+mxCompare(unrel,unrel2)
+
+# Q2: The line above is a Likelihood ratio test with 1 degree of freedom, what is
+# the meaning of a significant p-value in this case?
+
+# ANSWER: The causal path is significant, dropping it made the model (no_causal)
+#  significantly worse
+
+# Now let's compare with a typical 2sls test
+TSLS1=lm(X~I,data=dat1)
+Xhat=predict(TSLS1)
+TSLS2=lm(Y~Xhat,data=dat1)
+summary(TSLS2)
+
+# In the specialized ivreg package the syntax would be:
+# library(ivreg)
+# TSLS2=ivreg(Y~X|I,data=dat1)
+
+
+# Q3: Check out the estimate for Xhat in the previous summary and compare
+# to unrel estimate. Did MR-DoC estimated same values as 2sls?
+
+# ANSWER: Yes, the estimates are equal (0.316)
+
+
+# Now let's check the power to reject the hypothesis of g1=0 using the
+# non-centrality parameter for related and unrelated individuals.
+
+lambdam1=mxCompare(m1,m2)[2,7]
+dfs=mxCompare(m1,m2)[2,8]
+alpha=0.05
+ca=qchisq(alpha,dfs,ncp=0,lower.tail=F)
+powerm1=pchisq(ca,dfs,ncp=lambdam1,lower.tail=F)
+powerm1
+
+
+lambdaunrel=mxCompare(unrel,unrel2)[2,7]
+dfs=mxCompare(unrel,unrel2)[2,8]
+alpha=0.05 	# user specified: type I error prob.
+ca=qchisq(alpha,dfs,ncp=0,lower.tail=F)
+powerUnrel=pchisq(ca,dfs,ncp=lambdaunrel,lower.tail=F)
+powerUnrel
+
+
+# Q4: Which method had better power to detect the causal effect?
+# ANSWER: MR-DoC has a power of 0.99, 2sls has a power of 0.86
+
+
+#    Scenario 2: Pleiotropy -------------------------------------------------
+# Next consider the scenario with pleiotropy, assume re=0 and test g1 = 0
+# Check the results: does MR-DoC model recover correctly the parameters b2, g1,
+# and b1.
+# Do we detect a causal effect if we don't account for pleiotropy
+# (SEM, 2stage least squares, 2-sample MR)?
+
+sim_data2 <-  mrdoc1 |>
+  omxSetParameters(labels =  c("g1","b1", "b2",
+                               "ax2", "ay2", "cx2", "cy2", "ex2", "ey2",
+                               "covA", "covC", "covE","sigma_x"),
+                   values = c(0.143, 0.316, 0.127,
+                              0.424, 0.67, 0.670, 0.424, 0.519, 0.519,
+                              0.411,0.221,0, 1)) |>
+  mxGenerateData( nrows = 1000, empirical = TRUE)
+
+sim_data2$MZ <- mutate(sim_data2$MZ, iX_T2 = iX_T1)
+
+dwpmz <- sim_data2$MZ
+dwpdz <- sim_data2$DZ
+
+dim(dwpdz) #
+head(dwpdz)
+summary(dwpdz)
+
+
+dim(dwpmz) #
+head(dwpmz)
+summary(dwpmz)
+
+pleio = mrdoc1
+pleio$MZ <- mrdoc1$MZ + mxData(dwpmz, type = "raw")
+pleio$DZ <- mrdoc1$DZ + mxData(dwpdz, type = "raw")
+
+pleio <- mxRun(pleio)
+summary(pleio)
+
+# parameters used for simulation
+# g1 = 0.143
+# b1 = 0.316
+# b2 = 0.127
+# Q5: check the results: does MR-DoC model recover correctly the parameters b2,
+# g1, and b1? Hint: look at the true values used for simulation
+
+# ANSWER: Yes.
+
+
+##  MR-DoC: Test g1=0 using a likelihood ratio test   #########
+pleio2 <- omxSetParameters(name = "no_causal", pleio, label="g1", free = FALSE,
+                           values = 0)
+pleio2 <- mxRun(pleio2)
+
+mxCompare(pleio, pleio2)
+
+
+## Let's run in unrelateds: ---------------------------------------------------
+
+# take twin 1 from mz and dz
+dat2 <- rbind(dwpmz[,1:3],dwpdz[,1:3])|>
+  rename(X = X_T1,
+         Y = Y_T1,
+         I = iX_T1)
+
+
+unrel3 <- IVModel + mxData(dat2, type = "raw")
+# in the interest of brevity, let's autostart the model
+unrel3 <- mxAutoStart(unrel3)
+unrel3 <- mxRun(unrel3)
+
+
+summary(unrel3)
+
+# parameters used for simulation
+# g1 = 0.143
+# b1 = 0.316
+# b2 = 0.127
+# Q6: Does the 2sls model recover correctly the parameters used for simulation?
+
+# ANSWER: No, it overestimated g1
+
+unrel4 <- omxSetParameters(name = "no_causal", unrel3, label="g1", free = FALSE,
+                           values = 0)
+unrel4 <- mxRun(unrel4)
+mxCompare(unrel3,unrel4)
+
+## Which model has highest power? (look at chisq difference) -----------------
+
+## MR-DoC in Twins
+chisq_Twins=mxCompare(pleio,pleio2)[2,7]
+chisq_Twins
+
+## MR-SEM in unrelateds
+chisq_Unrel=mxCompare(unrel3, unrel4)[2,7]
+chisq_Unrel
+
+# Q7: Conclusion? Larger diff, higher power
+# ANSWER: Power in the model with unrelated was  higher.
+
+##  Fit the model using two stage least squares     ####################
+TSLS1=lm(X~I,data=dat2)
+Xhat=predict(TSLS1)
+TSLS2=lm(Y~Xhat,data=dat2)
+summary(TSLS2)
+# Check above that the 2sls test using either glm or SEM still finds
+# same estimates.
+
+# Q8: Do we detect a causal effect if we account for pleiotropy (SEM, 2stage
+# least squares)?
+
+# ANSWER: The models using unrelated detects a causal effect but not
+# accounting for pleiotropy the estimate was biased.
+
+# Scenario 3. Bidirectional causation -------------------------------------------
+
+# Specifying the mrdoc2 model. This is similar to mrdoc1 except
+# larger matrices (one more instrument)
+  # Matrix for causal paths
+BE <-  mxMatrix(name = "BE", type = "Full",nrow=4,  ncol = 4,byrow = TRUE,
+           labels = c(NA,   "g2", "b1", "b4",
+                      "g1", NA,   "b2", "b3",
+                      NA,   NA,   NA,   NA,
+                      NA,   NA,   NA,   NA),
+           free = c(FALSE, TRUE, TRUE, FALSE,
+                    TRUE, FALSE, FALSE, TRUE,
+                    FALSE, FALSE, FALSE, FALSE,
+                    FALSE, FALSE, FALSE, FALSE),
+           dimnames = list(c("X", "Y", "iX", "iY"),
+                           c("X", "Y", "iX", "iY")))
+
+# A, C and E decomposition
+A <- mxMatrix(name = 'A', type='Symm', nrow=4, ncol = 4,byrow = TRUE,
+           labels=c("ax2","covA",NA,NA,
+                    "covA","ay2",NA,NA,
+                    NA,NA,"x2"  ,"rf",
+                    NA,NA,"rf","y2"),
+           free=c(TRUE,TRUE,FALSE,FALSE,
+                  TRUE,TRUE,FALSE,FALSE,
+                  FALSE,FALSE,TRUE,TRUE,
+                  FALSE,FALSE,TRUE,TRUE),
+           dimnames = list(c("X", "Y", "iX", "iY"),
+                           c("X", "Y", "iX", "iY")))
+
+C <-  mxMatrix(name = 'C', type='Symm',nrow=4, ncol = 4,byrow = TRUE,
+           labels =c("cx2", "covC",NA,NA,
+                     "covC","cy2" ,NA,NA,
+                     NA,    NA,    NA,NA,
+                     NA,    NA,    NA,NA),
+           free=c(TRUE,TRUE,  FALSE,FALSE,
+                  TRUE,TRUE,  FALSE,FALSE,
+                  FALSE,FALSE,FALSE,FALSE,
+                  FALSE,FALSE,FALSE,FALSE),
+           dimnames = list(c("X", "Y", "iX", "iY"),
+                           c("X", "Y", "iX", "iY")))
+
+E <-  mxMatrix(name = 'E', type='Symm', nrow=4, ncol = 4,byrow = TRUE,
+           labels =c("ex2", "covE",NA,NA,
+                     "covE","ey2" ,NA,NA,
+                     NA,    NA,    NA,NA,
+                     NA,    NA,    NA,NA),
+           free= c(TRUE,TRUE,  FALSE,FALSE,
+                   TRUE,TRUE,  FALSE,FALSE,
+                   FALSE,FALSE,FALSE,FALSE,
+                   FALSE,FALSE,FALSE,FALSE),
+           dimnames = list(c("X", "Y", "iX", "iY"),
+                           c("X", "Y", "iX", "iY")))
+
+  # A filter matrix, as we need to remove the PRSs from twin 2
+filter <-  mxMatrix(name = 'filter', type='Full', nrow=6, ncol=8, free=FALSE,
+           byrow = TRUE,
+           values=c(1,0,0,0,0,0,0,0,
+                    0,1,0,0,0,0,0,0,
+                    0,0,1,0,0,0,0,0,
+                    0,0,0,1,0,0,0,0,
+                    0,0,0,0,1,0,0,0,
+                    0,0,0,0,0,1,0,0),
+           dimnames = list(c("X_T1", "Y_T1", "iX_T1","iY_T1",
+                             "X_T2", "Y_T2"),
+                           c("X_T1", "Y_T1", "iX_T1","iY_T1","X_T2",
+                             "Y_T2", "iX_T2","iY_T2")))
+
+LY <-  mxMatrix(name = 'LY', type='Full',nrow=4, ncol = 4, free = FALSE,
+           values = diag(4), labels = NA,
+           dimnames = list(c("X", "Y", "iX", "iY"),
+                           c("X", "Y", "iX", "iY")))
+
+# The object with the means
+mean_dz <-  mxMatrix(name = 'mean_dz', type='Full', nrow=1, ncol=8, free=TRUE,
+           byrow = TRUE, values = 0, labels=c('mX1','mY2','miX1','miY2',
+                                              'mX1','mY2','miX1','miY2') )
+
+# Removing the PRS from the MZ means
+algebras <- list(  mxAlgebra('mean_mz', expression = mean_dz %*% t(filter)),
+  # Identity matrix to algebra calculations
+  mxMatrix(name = 'I', type='Iden', nrow= 4,ncol= 4 ),
+  # The needed matrices for calculating the variances
+  mxAlgebra('A_'  , expression =  LY %&% solve(I - BE) %&% A),
+  mxAlgebra('C_'  , expression =  LY %&%solve(I - BE) %&% C),
+  mxAlgebra('E_'  , expression =  LY %&%solve(I - BE) %&% E),
+  mxAlgebra('full_variance' , expression= A_ + C_ + E_),
+  mxAlgebra('variance_mz_', expression=rbind(
+    cbind(full_variance, A_ + C_),
+    cbind(A_ + C_, full_variance))),
+  mxAlgebra('variance_dz', expression=rbind(
+    cbind(full_variance, 0.5%x%A_ + C_),
+    cbind(0.5%x%A_ + C_, full_variance))),
+  mxAlgebra('variance_mz', expression= filter%&%variance_mz_))
+
+top_mr2 <- mxModel("top", BE, A, C, E, filter, LY, mean_dz,  algebras)
+
+# Preparing the objects for the multiple groups (MZ, DZ) analysis
+MZ_mr2 = mxModel("MZ", mxFitFunctionML(),
+  mxExpectationNormal(covariance = "top.variance_mz",means = "top.mean_mz",
+                      dimnames =  c("X_T1", "Y_T1", "iX_T1", "iY_T1",
+                                    "X_T2", "Y_T2")))
+
+DZ_mr2 = mxModel("DZ", mxFitFunctionML(),
+  mxExpectationNormal(covariance = "top.variance_dz", means = "top.mean_dz",
+                      dimnames =  c("X_T1", "Y_T1", "iX_T1", "iY_T1",
+                                    "X_T2", "Y_T2", "iX_T2", "iY_T2")))
+
+# Combining objects to generate the final model
+mrdoc2 = mxModel("mrdoc2", top_mr2, MZ_mr2, DZ_mr2,
+                 mxFitFunctionMultigroup(c("MZ","DZ") ) )
+
+# Simulating using mrdoc2, now we are simulating data so that there is an
+# effect of X on Y and vice-versa. g1, g2 !=0
+sim_data3 <- mrdoc2 |>
+  omxSetParameters(labels =  c("g1","g2", "b1", "b3",
+                               "ax2", "ay2", "cx2", "cy2", "ex2", "ey2",
+                               "covA", "covC", "covE","rf", "x2", "y2"),
+                   values = c(0.184, 0.111, 0.411, 0.519,
+                              0.424, 0.670, 0.670, 0.424, 0.519, 0.519,
+                              0.411,0.221,0.221,0.111, 1,1)) |>
+  mxGenerateData( nrows = 1000, empirical = TRUE)
+
+# Remember, we need to duplicate the columns for the second twin
+sim_data3$MZ <- mutate(sim_data3$MZ, iX_T2 = iX_T1, iY_T2 = iY_T1)
+
+dg2mz <- sim_data3$MZ
+dg2dz <- sim_data3$DZ
+
+
+dim(dg2dz) #
+head(dg2dz)
+summary(dg2dz)
+
+dim(dg2mz) #
+head(dg2mz)
+summary(dg2mz)
+
+bidir <- mrdoc2
+bidir$MZ <- bidir$MZ + mxData(dg2mz, type = "raw")
+bidir$DZ <- bidir$DZ + mxData(dg2dz, type = "raw")
+
+bidir <- mxAutoStart(bidir)
+bidir <- mxRun(bidir)
+
+# You can check for local identification: (this is slow, do this at home)
+# mxCheckIdentification(bidir)$status
+
+summary(bidir)
+
+# simulated parameters
+# g1 = 0.184
+# g2 = 0.111
+# b1 = 0.411
+# b3 = 0.519
+# Q9: Check the results: does MR-DoC model recover correctly the parameters
+# g1, g2, b1, and b3
+
+# ANSWER: Yes, the estimates matches the true values set for the data.
+
+#  MR-DoC: Test g1=0 using a likelihood ratio test
+bidir2 <- omxSetParameters(name = "drop_g1g2", bidir, label=c("g1", "g2"),
+                           free = FALSE, values = 0)
+bidir2 <-  mxRun(bidir2)
+
+mxCompare(bidir, bidir2)
+
+# Q10: How many degrees of freedom for this LRT?
+# ANSWER: Two degrees of freedom, we dropped both g1 and g2.
+
+# Q11: Are the causal paths significant?
+# ANSWER: Dropping g1 and g2 resulted in a significantly worse model, therefore
+# the bidirectional relationship is significant.
+
+## Let's run in unrelateds X -> Y: ---------------------------------------------
+
+# We are proceeding to check if running 2sls in each direction matches the true
+# values we set in the simulation. Remember the model includes indirect
+# pleiotropy of type PS2 -> rf -> PS1 -> X
+
+
+# take twin 1 from mz and dz
+dat4=rbind(dg2mz[,1:4],dg2dz[,1:4]) |>
+  rename(X = X_T1,
+         Y = Y_T1,
+         I = iX_T1)
+
+unrel7 <- IVModel + mxData(dat4, type = "raw")
+# in the interest of brevity, let's autostart the model
+unrel7 <- mxAutoStart(unrel7)
+unrel7 <- mxRun(unrel7)
+
+summary(unrel7)
+
+## Let's run in unrelateds Y -> X: ---------------------------------------------
+
+# take twin 1 from mz and dz
+dat5=rbind(dg2mz[,1:4],dg2dz[,1:4]) |>
+  rename(Y = X_T1,  # notice the inversion here
+         X = Y_T1,  # notice the inversion here
+         I = iY_T1)
+# The inversion above is only necessary so we don't have to rewrite the model
+# from scratch.
+
+# Bear with me as I rename the parameters in the base model
+# This will help interpreting results
+IVModelYX = omxSetParameters(name = "IVModelYX", IVModel, label = c("g1","b1", "vX", "vY", "mX", "mY"),
+                           newlabel = c("g2","b3", "vY", "vX", "mY", "mX"))
+
+unrel8 <- IVModelYX + mxData(dat5, type = "raw")
+# in the interest of brevity, let's autostart the model
+unrel8 <- mxAutoStart(unrel8)
+unrel8 <- mxRun(unrel8)
+summary(unrel8)
+
+# The result of the summary immediately above is of the relationship of
+# Y to X, in other words g2.
+
+# simulated parameters
+# g1 = 0.184
+# g2 = 0.111
+# b1 = 0.411
+# b3 = 0.519
+# Q12: Does MR-SEM models (unrel7 or X->Y, and model unrel8 Y <- X) recover correctly the parameters used for simulation?
+# What happened to the estimates?
+
+# ANSWER: Both g1 and g2 were overestimated in the 2sls solution.
+
+# Scenario 4: Pleiotropy & no causal effect STRETCH GOAL!  -------------------
+# We are back to MR-DoC1 and we will be simulating data without
+# the causal effect
+# Compare the results obtained with MR-DoC, unrelateds SEM, 2SLS, 2-sample MR.
+sim_data4 <-  mrdoc1 |>
+  omxSetParameters(labels =  c("g1","b1", "b2",
+                               "ax2", "ay2", "cx2", "cy2", "ex2", "ey2",
+                               "covA", "covC", "covE","sigma_x"),
+                   values = c(0, 0.316, 0.316,
+                              0.424, 0.670, 0.670, 0.424, 0.519, 0.519,
+                              0.411,0.221,0, 1)) |>
+  mxGenerateData( nrows = 1000, empirical = TRUE)
+
+sim_data4$MZ <-  mutate(sim_data4$MZ, iX_T2 = iX_T1)
+
+dg1mz <- sim_data4$MZ
+dg1dz <- sim_data4$DZ
+
+dim(dg1dz) #
+head(dg1dz)
+summary(dg1dz)
+
+dim(dg1mz) #
+head(dg1mz)
+summary(dg1mz)
+
+no_causal <- mrdoc1
+no_causal$MZ <- mrdoc1$MZ + mxData(dg1mz, type = "raw")
+no_causal$DZ <- mrdoc1$DZ + mxData(dg1dz, type = "raw")
+
+no_causal <- mxRun(no_causal)
+summary(no_causal)
+
+# Q13: Check the results: does MR-DoC model recover correctly the parameters b2,
+# g1, and b1?
+
+# ANSWER: Yes, it does.
+
+
+##  MR-DoC: Test g1=0 using a likelihood ratio test   #########
+
+no_causal2 <- omxSetParameters(name = "drop_g1", no_causal, label="g1",
+                               free = FALSE, values = 0)
+no_causal2 <- mxRun(no_causal2)
+mxCompare(no_causal, no_causal2)
+
+# Q14: Do we detect a causal effect with a true g1 value set to zero?
+
+# ANSWER: As expected, no.
+
+## Let's run in unrelateds: ---------------------------------------------------
+
+# take twin 1 from mz and dz
+dat3 <- rbind(dg1mz[,1:3],dg1dz[,1:3])|>
+  rename(X = X_T1,
+         Y = Y_T1,
+         I = iX_T1)
+
+unrel5 <- IVModel + mxData(dat3, type = "raw")
+# in the interest of brevity, let's autostart the model
+unrel5 <- mxAutoStart(unrel5)
+unrel5 <- mxRun(unrel5)
+
+# parameters used for simulation
+# g1 = 0
+# b1 = 0.316
+# b2 = 0.316
+summary(unrel5)
+
+# Q15: Does MR-SEM model recover correctly the parameters used for simulation?
+# ANSWER: No, g1 = 0 + pleiotropy severily biased the causal path in the models
+# that used unrelated data.
+
+unrel6 <- omxSetParameters(name = "no_causal", unrel5, label="g1", free = FALSE,
+                           values = 0)
+unrel6 <- mxRun(unrel6)
+mxCompare(unrel5,unrel6)
+
+
+##  Fit the model using two stage least squares     ####################
+TSLS1=lm(X~I,data=dat3)
+Xhat=predict(TSLS1)
+TSLS2=lm(Y~Xhat,data=dat3)
+summary(TSLS2)
+
+# The 2sls regression again recover the same biased estimates as MR-SEM. In
+# the presence of pleiotropy MR-DoC outperforms the other methods.
+
+
+#+end_src
+
